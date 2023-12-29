@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons.Filled
+import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SettingsBluetooth
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Card
@@ -100,7 +102,7 @@ fun SnapclientList(
 private fun Greetings(
     modifier: Modifier = Modifier,
     // TODO a list of custom data object
-    names: List<Pair<String, Float>> = listOf(Pair("localhost", 100f), Pair("Pixel 3a", 85f))
+    names: List<Pair<String, Float>> = listOf(Pair("localhost", 100f), Pair("One+3", 85f))
 ) {
     LazyColumn(modifier = modifier.padding(vertical = 4.dp)) {
         items(items = names) { name ->
@@ -138,12 +140,27 @@ private fun CardContent(name: String, volume: Float) {
                 .weight(1f)
                 .padding(12.dp)
         ) {
-            Text(
-                text = name,
-                style = MaterialTheme.typography.headlineMedium.copy(
-                    fontWeight = FontWeight.ExtraBold
+            Row(verticalAlignment = Alignment.CenterVertically) {
+
+                Text(
+                    modifier = Modifier.padding(16.dp),
+                    text = name,
+                    style = MaterialTheme.typography.headlineMedium.copy(
+                        fontWeight = FontWeight.ExtraBold
+                    )
                 )
-            )
+
+                Text(text = "mrG ejemplo")
+                IconButton(
+                    modifier = Modifier.padding(7.dp),
+                    onClick = { /*TODO*/ }
+                ) {
+                    Icon(
+                        imageVector = Filled.SelfImprovement,
+                        contentDescription = null
+                    )
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = if (expanded) Filled.VolumeUp else Filled.VolumeOff,
@@ -165,7 +182,7 @@ private fun CardContent(name: String, volume: Float) {
                 Spacer(modifier = Modifier.height(16.dp))
                 IconButton(onClick = { /*expanded = !expanded */ }) {
                     Icon(
-                        imageVector = if (expanded) Filled.Settings else Filled.Settings,
+                        imageVector = if (expanded) Filled.SettingsBluetooth else Filled.Settings,
                         contentDescription = if (expanded) {
                             stringResource(R.string.app_name)
                         } else {

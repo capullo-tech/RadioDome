@@ -3,14 +3,17 @@ package tech.capullo.radio.viewmodels
 import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioManager
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.toMutableStateList
 import androidx.lifecycle.ViewModel
@@ -25,7 +28,17 @@ import control.json.Stream
 import control.json.Volume
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -44,29 +57,31 @@ import java.util.concurrent.Executors
 import javax.inject.Inject
 
 @HiltViewModel
-class RadioViewModel @Inject internal constructor(
-    @ApplicationContext private val applicationContext: Context
+class RadioViewModel @Inject constructor(
+    @ApplicationContext private val applicationContext: Context,
 ) : ViewModel() {
-    private val _hostAddresses = getInetAddresses().toMutableStateList()
+    private val networkInterfacesRepository: NetworkInterfacesRepository =
+        NetworkInterfacesRepository()
+    private val _hostAddresses = MutableStateFlow<List<String>>(emptyList())
+    val hostAddresses: StateFlow<List<String>> = _hostAddresses
+
     private val PREF_UNIQUE_ID = "PREF_UNIQUE_ID"
 
     private val _snapclientsList = mutableListOf<String>().toMutableStateList()
     @SuppressLint("MutableCollectionMutableState")
     private val _snapserverServerStatus = mutableListOf<ServerStatus>().toMutableStateList()
 
-    private val _something = mutableStateOf(ServerStatus(JSONObject()))
-    val something: MutableState<ServerStatus> get() = _something
-    val hostAddresses: List<String>
-        get() = _hostAddresses
-
     val snapClientsList: SnapshotStateList<ServerStatus> get() = _snapserverServerStatus
-
-    fun remove(item: String) {
-        _hostAddresses.remove(item)
-    }
 
     init {
         viewModelScope.launch {
+            networkInterfacesRepository.ipv4HostAddresses.collect {
+                Log.d("COLLECT", "collecting inside viewModel ${Thread.currentThread().name}")
+                _hostAddresses.value = it
+            }
+
+            Log.d("COLLECT", "viewModel outside collect ${Thread.currentThread().name}")
+
             val executorService = Executors.newCachedThreadPool()
 
             val sessionListener: AndroidZeroconfServer.SessionListener =
@@ -88,7 +103,7 @@ class RadioViewModel @Inject internal constructor(
             executorService.execute(
                 SetupRunnable(
                     applicationContext,
-                    getDeviceName(applicationContext), sessionListener
+                    getDeviceName(), sessionListener
                 )
             )
         }
@@ -122,17 +137,17 @@ class RadioViewModel @Inject internal constructor(
         return uniqueID
     }
 
-    private fun getDeviceName(appContext: Context): String {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+    fun getDeviceName(): String =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
             val deviceName = Settings.Global.getString(
-                appContext.contentResolver,
+                applicationContext.contentResolver,
                 Settings.Global.DEVICE_NAME
             )
             if (deviceName == Build.MODEL) Build.MODEL else "$deviceName (${Build.MODEL})"
         } else {
             Build.MODEL
         }
-    }
+
     private suspend fun startListener(
         cacheDir: String,
         nativeLibraryDir: String,
@@ -200,7 +215,7 @@ class RadioViewModel @Inject internal constructor(
                     Log.d("SESSION", "onUpdate: server:$server")
                     server?.let {
                         _snapserverServerStatus.add(it)
-                        _something.value = it
+                        // _something.value = it
                     }
                 }
 
@@ -285,7 +300,7 @@ class RadioViewModel @Inject internal constructor(
                                         )
                                         _snapserverServerStatus.clear()
                                         _snapserverServerStatus.add(ServerStatus(jjj))
-                                        _something.value = ServerStatus(jjj)
+                                        // _something.value = ServerStatus(jjj)
                                     }
                                     Log.i(
                                         "SESSION",
@@ -346,6 +361,7 @@ class RadioViewModel @Inject internal constructor(
         remoteControl.getServerStatus()
     }
 }
+
 private fun getInetAddresses(): List<String> =
     Collections.list(NetworkInterface.getNetworkInterfaces()).flatMap { networkInterface ->
         Collections.list(networkInterface.inetAddresses).filter { inetAddress ->
@@ -354,6 +370,44 @@ private fun getInetAddresses(): List<String> =
             }?.let { true } ?: false
         }.map { it.hostAddress!! }
     }
+
+class NetworkInterfacesDataSource(
+    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
+) {
+    val hostAddresses: Flow<List<NetworkInterface>> = flow {
+        Log.d("COLLECT", "dataSource ${Thread.currentThread().name}")
+        emit(getNetworkInterfaces())
+    }
+
+    /*
+    fun getNetworkInterfaces() =
+        Collections.list(NetworkInterface.getNetworkInterfaces())
+     */
+    private suspend fun getNetworkInterfaces(): List<NetworkInterface> =
+        withContext(defaultDispatcher) {
+            Log.d("COLLECT", "dataSource - 2 ${Thread.currentThread().name}")
+            Collections.list(NetworkInterface.getNetworkInterfaces())
+        }
+
+}
+
+class NetworkInterfacesRepository(
+    networkInterfacesDataSource: NetworkInterfacesDataSource =
+        NetworkInterfacesDataSource()
+) {
+    val ipv4HostAddresses: Flow<List<String>> =
+        networkInterfacesDataSource.hostAddresses.map { networkInterfaces ->
+            networkInterfaces.flatMap { networkInterface ->
+                Collections.list(networkInterface.inetAddresses).filter { inetAddress ->
+                    inetAddress.hostAddress != null && inetAddress.hostAddress?.takeIf {
+                        it.indexOf(":") < 0 && !inetAddress.isLoopbackAddress
+                    }?.let { true } ?: false
+                }.map { it.hostAddress!! }
+            }
+            // what I should return here is a List<String>
+        }
+}
+
 private class SnapcastRunnable(
     private val cacheDir: String,
     private val nativeLibDir: String,
@@ -451,6 +505,7 @@ private class SessionChangedRunnable(
         handler.post { callback.playerReady(player, session.username()) }
     }
 }
+
 private class SetupRunnable(
     private val context: Context,
     private val deviceName: String,
